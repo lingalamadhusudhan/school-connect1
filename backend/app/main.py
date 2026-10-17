@@ -1,10 +1,14 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
+from sqlalchemy.orm import Session
+
+from app.db.database import get_db
 
 
 app = FastAPI(
     title="School-Connect API",
-    description="Backend API for the School-Connect School Management System",
+    description="School-Connect School Management System API",
     version="1.0.0",
 )
 
@@ -25,13 +29,25 @@ def home():
     return {
         "application": "School-Connect",
         "status": "running",
-        "message": "Welcome to School-Connect API"
     }
 
 
 @app.get("/api/health")
-def health_check():
+def health():
     return {
         "status": "healthy",
-        "service": "school-connect-api"
+        "service": "school-connect-api",
+    }
+
+
+@app.get("/api/database/health")
+def database_health(
+    db: Session = Depends(get_db),
+):
+    db.execute(text("SELECT 1"))
+
+    return {
+        "status": "healthy",
+        "database": "PostgreSQL",
+        "application": "School-Connect",
     }
