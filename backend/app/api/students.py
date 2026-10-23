@@ -1,153 +1,144 @@
 from typing import List
-
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy.exc import IntegrityError
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.db.database import get_db
+# Database session dependency
+from app.core.database import get_db
+
+# Security & RBAC dependencies
+from app.core.dependencies import get_current_user, require_admin
+
+# Pydantic schemas
+from app.schemas.student import StudentCreate, StudentUpdate, StudentResponse
+
+# Database model
 from app.models.student import Student
-from app.schemas.student import (
-    StudentCreate,
-    StudentResponse,
-    StudentUpdate,
-)
+
+router = APIRouter(prefix="/students", tags=["students"])
 
 
-router = APIRouter(
-    prefix="/api/students",
-    tags=["Students"],
-)
-
-
+# ==========================================
+# 1. CREATE STUDENT (ADMIN ONLY)
+# ==========================================
 @router.post(
     "/",
     response_model=StudentResponse,
     status_code=status.HTTP_201_CREATED,
+    summary="Create a new student (Admin only)",
 )
 def create_student(
     student_data: StudentCreate,
     db: Session = Depends(get_db),
+    current=Depends(require_admin),
 ):
-    existing = (
-        db.query(Student)
-        .filter(
-            Student.admission_number
-            == student_data.admission_number
-        )
-        .first()
-    )
-
-    if existing:
+    # Check if a student with this email already exists
+    existing_student = db.query(Student).filter(Student.email == student_data.email).first()
+    if existing_student:
         raise HTTPException(
-            status_code=409,
-            detail="Admission number already exists",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="A student with this email already exists.",
         )
 
-    student = Student(**student_data.model_dump())
-
-    db.add(student)
-
-    try:
-        db.commit()
-        db.refresh(student)
-    except IntegrityError:
-        db.rollback()
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid parent_id or class_id",
-        )
-
-    return student
+    new_student = Student(**student_data.model_dump())
+    db.add(new_student)
+    db.commit()
+    db.refresh(new_student)
+    return new_student
 
 
+# ==========================================
+# 2. GET ALL STUDENTS (AUTHENTICATED USERS)
+# ==========================================
 @router.get(
     "/",
     response_model=List[StudentResponse],
+    status_code=status.HTTP_200_OK,
+    summary="List all students",
 )
 def get_students(
-    skip: int = Query(default=0, ge=0),
-    limit: int = Query(default=100, ge=1, le=500),
+    skip: int = 0,
+    limit: int = 100,
     db: Session = Depends(get_db),
+    current=Depends(get_current_user),
 ):
-    return (
-        db.query(Student)
-        .offset(skip)
-        .limit(limit)
-        .all()
-    )
+    students = db.query(Student).offset(skip).limit(limit).all()
+    return students
 
 
+# ==========================================
+# 3. GET SINGLE STUDENT BY ID (AUTHENTICATED USERS)
+# ==========================================
 @router.get(
     "/{student_id}",
     response_model=StudentResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Get student by ID",
 )
 def get_student(
     student_id: int,
     db: Session = Depends(get_db),
+    current=Depends(get_current_user),
 ):
-    student = db.get(Student, student_id)
-
+    student = db.query(Student).filter(Student.id == student_id).first()
     if not student:
         raise HTTPException(
-            status_code=404,
-            detail="Student not found",
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Student with id {student_id} not found",
         )
-
     return student
 
 
+# ==========================================
+# 4. UPDATE STUDENT (ADMIN ONLY)
+# ==========================================
 @router.put(
     "/{student_id}",
     response_model=StudentResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Update student details (Admin only)",
 )
 def update_student(
     student_id: int,
     student_data: StudentUpdate,
     db: Session = Depends(get_db),
+    current=Depends(require_admin),
 ):
-    student = db.get(Student, student_id)
-
+    student = db.query(Student).filter(Student.id == student_id).first()
     if not student:
         raise HTTPException(
-            status_code=404,
-            detail="Student not found",
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Student with id {student_id} not found",
         )
 
-    updates = student_data.model_dump(exclude_unset=True)
+    update_dict = student_data.model_dump(exclude_unset=True)
+    for field, value in update_dict.items():
+        setattr(student, field, value)
 
-    for key, value in updates.items():
-        setattr(student, key, value)
-
-    try:
-        db.commit()
-        db.refresh(student)
-    except IntegrityError:
-        db.rollback()
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid student update",
-        )
-
+    db.commit()
+    db.refresh(student)
     return student
 
 
+# ==========================================
+# 5. DELETE STUDENT (ADMIN ONLY)
+# ==========================================
 @router.delete(
     "/{student_id}",
     status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete a student (Admin only)",
 )
 def delete_student(
     student_id: int,
     db: Session = Depends(get_db),
+    current=Depends(require_admin),
 ):
-    student = db.get(Student, student_id)
-
+    student = db.query(Student).filter(Student.id == student_id).first()
     if not student:
         raise HTTPException(
-            status_code=404,
-            detail="Student not found",
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Student with id {student_id} not found",
         )
 
     db.delete(student)
     db.commit()
-
     return None
